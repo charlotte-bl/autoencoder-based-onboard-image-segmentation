@@ -1,1 +1,5 @@
 train/
+__MACOSX
+__pycache__
+.ipynb_checkpoints
+models_results/
