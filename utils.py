@@ -1,13 +1,18 @@
+import os
 import numpy as np
 from PIL import Image
 import torch
-import torchvision
-import matplotlib.pyplot as plt
 from torch.utils.data import Dataset
-import os
+from torchvision.transforms import ToTensor
+import torchvision.transforms.functional as TF
+import torchvision.transforms as transforms
+import matplotlib.pyplot as plt
+from torchvision.transforms import ToTensor
+import random
+import torchvision
 
-class ImageSegmentationTrainingDataset(Dataset):
-    def __init__(self, root_dir, transform=None):
+class ImageSegmentationDatasetOneHotEncoding(Dataset):
+    def __init__(self, root_dir, transform=None, augment=True):
         self.root_dir = root_dir
         # because of .DS_Store presence
         self.folders = sorted([
@@ -15,6 +20,8 @@ class ImageSegmentationTrainingDataset(Dataset):
             if os.path.isdir(os.path.join(root_dir, f))
         ])
         self.transform = transform
+        self.augment = augment
+        self.to_tensor = ToTensor()
 
     def __len__(self):
         return len(self.folders)
@@ -28,26 +35,70 @@ class ImageSegmentationTrainingDataset(Dataset):
         rgb_image = Image.open(rgb_path).convert('RGB')
         label_image = Image.open(label_path).convert('RGB')
 
-        label_onehotencoding = convert_rgb_to_onehotencoding(label_image)
 
+        # augmentation
+        if self.augment and random.random() < 0.5:
+            rgb_image = TF.hflip(rgb_image)
+            label_image = TF.hflip(label_image)
+
+        label_onehotencoding = convert_rgb_to_onehotencoding(label_image)
+        rgb_image = self.to_tensor(rgb_image)
+        label_image = self.to_tensor(label_image)
+        
         if self.transform:
             rgb_image = self.transform(rgb_image)
-            label_image = self.transform(label_image)
 
         return rgb_image, label_image, label_onehotencoding
-    
 
-# Labels format
+class ImageSegmentationDatasetLogit(Dataset):
+    def __init__(self, root_dir, transform=None, augment=True):
+        self.root_dir = root_dir
+        # because of .DS_Store presence
+        self.folders = sorted([
+            f for f in os.listdir(root_dir)
+            if os.path.isdir(os.path.join(root_dir, f))
+        ])
+        self.transform = transform
+        self.augment = augment
+        self.to_tensor = ToTensor()
+
+    def __len__(self):
+        return len(self.folders)
+
+    def __getitem__(self, idx):
+        folder_path = os.path.join(self.root_dir, self.folders[idx])
+
+        rgb_path = os.path.join(folder_path, 'rgb.jpg')
+        label_path = os.path.join(folder_path, 'labels.png')
+
+        rgb_image = Image.open(rgb_path).convert('RGB')
+        label_image = Image.open(label_path).convert('RGB')
+
+
+        # augmentation
+        if self.augment and random.random() < 0.5:
+            rgb_image = TF.hflip(rgb_image)
+            label_image = TF.hflip(label_image)
+
+        label_logit = convert_rgb_to_logit(label_image)
+        rgb_image = self.to_tensor(rgb_image)
+        label_image = self.to_tensor(label_image)
+        
+        if self.transform:
+            rgb_image = self.transform(rgb_image)
+
+        return rgb_image, label_image, label_logit
+
 color_map = {
-    (1,88,255): 0,  # sky - blue
-    (156,76,30): 1,      # rough trail - brown
-    (178,176,153): 2,   # smooth trail - grey
-    (128,255,0): 3,      # traversable grass - light green
-    (40,80,0): 4,    # high vegetation - dark green
-    (0,160,0): 5,      # non-traversable low vegetation - medium green
-    (255,0,128): 6,     # puddle - pink
-    (255,0,0): 7,  # obstacle - red
-    (255,255,255) : 8, # undefined - white
+    (255,255,255) : 0,      # undefined/background - white
+    (178,176,153): 1,       # smooth trail - grey
+    (128,255,0): 2,         # traversable grass - light green
+    (156,76,30): 3,         # rough trail - brown
+    (255,0,128): 4,         # puddle - pink
+    (255,0,0): 5,           # obstacle - red
+    (0,160,0): 6,           # non-traversable low vegetation - medium green
+    (40,80,0): 7,           # high vegetation - dark green
+    (1,88,255): 8,          # sky - blue
 }
 
 def convert_rgb_to_onehotencoding(label_img):
@@ -74,6 +125,17 @@ def convert_onehotencoding_to_rgb(onehot_tensor):
         rgb_image[class_map == class_idx] = color
 
     return Image.fromarray(rgb_image)
+
+def convert_rgb_to_logit(label_img):
+    label_np = np.array(label_img)  # (H, W, 3) - RGB
+    h, w, _ = label_np.shape
+    class_map = np.zeros((h, w), dtype=np.uint8) #uint8 as precised in the task
+
+    for rgb, class_idx in color_map.items():
+        mask = np.all(label_np == rgb, axis=-1)
+        class_map[mask] = class_idx
+
+    return torch.from_numpy(class_map)
 
 def show_images_batch(images):
     grid = torchvision.utils.make_grid(images, nrow=2)
